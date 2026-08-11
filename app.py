@@ -1,14 +1,3 @@
-"""
-NSL-KDD Multiclass IDS Dashboard
-=================================
-Run:  streamlit run app.py
-
-Model loading priority:
-  1. Live: loads .pkl models + X_test/y_test.npy → computes all metrics fresh
-  2. Fallback: reads results/metrics.json if test data unavailable
-  3. Demo: hardcoded notebook values if no artifacts found at all
-"""
-
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -20,7 +9,6 @@ from pathlib import Path
 from sklearn.metrics import (classification_report, confusion_matrix,
                              roc_auc_score)
 
-# ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="IDS Dashboard — NSL-KDD",
     page_icon="🛡️",
@@ -28,14 +16,13 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Constants ─────────────────────────────────────────────────────────────────
 CLASSES      = ["DoS", "Normal", "Probe", "R2L", "U2R"]
 CLASS_COLORS = {
     "Normal": "#4CAF50", "DoS": "#F44336",
     "Probe":  "#FF9800", "R2L": "#9C27B0", "U2R": "#F50057",
 }
-MODEL_DIR = Path("models")   # ← drop your .pkl files here
-DATA_DIR  = Path("results")  # ← drop X_test.npy / y_test.npy here
+MODEL_DIR = Path("models")   
+DATA_DIR  = Path("results")  
 
 MODEL_FILES = {
     "Random Forest":        "random_forest.pkl",
@@ -45,8 +32,6 @@ MODEL_FILES = {
     "Randomised Search CV": "random_search_xgboost.pkl",
 }
 
-# ── Demo fallback — real values from notebook outputs ────────────────────────
-# Order: [DoS, Normal, Probe, R2L, U2R]  source: classification reports in notebook
 _DEMO_RESULTS = {
     "Random Forest": {
         "precision": [0.9617, 0.6637, 0.8332, 0.9681, 0.5455],
@@ -58,7 +43,6 @@ _DEMO_RESULTS = {
                         [480,358,1584, 0,0],[190,2491, 78,127,0],[5,45, 7, 5,5]]),
     },
     "XGBoost": {
-        # Flat XGBoost — from notebook comparison table (cell 20)
         "precision": [0.9751, 0.6700, 0.8400, 0.9751, 0.7895],
         "recall":    [0.7800, 0.9750, 0.6600, 0.1085, 0.2239],
         "f1":        [0.8672, 0.7921, 0.7381, 0.1953, 0.3488],
@@ -76,23 +60,17 @@ _DEMO_RESULTS = {
         "cm": np.array([[5964,1130,230,110,26],[300,8901,340,150,20],
                         [450,410,1519,36,6],[210,2250,120,379,926],[4,20,8,3,32]]),
     },
-    # Hierarchical — from notebook cell 18 (test) + cell 20 comparison table
-    # macro_f1=0.6295, accuracy=0.7905, macro_auc=0.9236
-    # R2L recall improved vs flat XGBoost (0.1203 vs 0.1085)
-    # U2R recall improved (0.3433 vs 0.2239) — key finding re: compounding stage errors
     "Hierarchical (2-Stage)": {
         "precision": [0.9720, 0.6750, 0.8450, 0.9720, 0.7188],
         "recall":    [0.7900, 0.9760, 0.6650, 0.1203, 0.3433],
         "f1":        [0.8720, 0.7967, 0.7430, 0.2143, 0.4643],
         "support":   [7460, 9711, 2421, 2885, 67],
         "macro_f1":  0.6295, "accuracy": 0.7905, "macro_auc": 0.9236,
-        # cm approximate — exact matrix computed live once hierarchical.pkl loaded
         "cm": np.array([[5893,1310,198,50,9],[68,9479,98,57,9],
                         [410,365,1610,30,6],[148,2398,165,347,827],[3,28,8,13,15]]),
     },
 }
 
-# ── Loaders ───────────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Loading model artifacts…")
 def load_models():
     """
@@ -111,7 +89,6 @@ def load_models():
 
 @st.cache_resource(show_spinner="Loading test data…")
 def load_test_data():
-    """Load preprocessed test arrays saved from the notebook."""
     X_path = DATA_DIR / "X_test.npy"
     y_path = DATA_DIR / "y_test.npy"
     if X_path.exists() and y_path.exists():
@@ -119,20 +96,16 @@ def load_test_data():
     return None, None
 
 def _hierarchical_predict(model_dict, X):
-    """
-    Run the two-stage hierarchical prediction using the dict saved from the notebook.
-    Mirrors hierarchical_predict() from the notebook exactly.
-    """
     stage1     = model_dict["stage1_model"]
     stage2     = model_dict["stage2_model"]
     normal_idx = model_dict["normal_idx"]
     new_to_orig= model_dict["new_to_orig"]
     n_classes  = model_dict["n_classes"]
 
-    stage1_proba = stage1.predict_proba(X)      # (n, 2)
+    stage1_proba = stage1.predict_proba(X)     
     p_normal     = stage1_proba[:, 0]
     p_attack     = stage1_proba[:, 1]
-    stage2_proba = stage2.predict_proba(X)      # (n, 4)
+    stage2_proba = stage2.predict_proba(X)     
 
     y_proba = np.zeros((X.shape[0], n_classes))
     y_proba[:, normal_idx] = p_normal
@@ -144,10 +117,8 @@ def _hierarchical_predict(model_dict, X):
 
 @st.cache_data(show_spinner="Computing metrics…")
 def compute_metrics(_models, _X_test, _y_test):
-    """Run inference + compute all metrics from live model outputs."""
     results = {}
     for name, model in _models.items():
-        # Handle hierarchical two-stage dict vs flat sklearn model
         if isinstance(model, dict) and "stage1_model" in model:
             preds, proba = _hierarchical_predict(model, _X_test)
         else:
@@ -181,12 +152,6 @@ def compute_metrics(_models, _X_test, _y_test):
     return results
 
 def get_results():
-    """
-    Priority chain:
-      1. Live models + test data  → compute_metrics (fully live)
-      2. Demo fallback            → _DEMO_RESULTS (notebook values)
-    Returns (results_dict, data_source_label)
-    """
     models = load_models()
     X_test, y_test = load_test_data()
 
@@ -194,7 +159,6 @@ def get_results():
         results = compute_metrics(models, X_test, y_test)
         return results, "live", models
     else:
-        # Show which artifacts are missing so user knows what to add
         missing = []
         if not models:
             missing.append("no `.pkl` files found in `models/`")
@@ -202,12 +166,10 @@ def get_results():
             missing.append("`results/X_test.npy` / `y_test.npy` not found")
         return _DEMO_RESULTS, f"demo ({'; '.join(missing)})", models
 
-# Class distribution from your notebook
 TRAIN_DIST = {"Normal": 57241, "DoS": 39038, "Probe": 9908, "R2L": 846,  "U2R": 44}
 TEST_DIST  = {"Normal": 9711,  "DoS": 7460,  "Probe": 2421, "R2L": 2885, "U2R": 67}
 SMOTE_DIST = {"Normal": 67343, "DoS": 45927, "Probe": 33671,"R2L": 10101,"U2R": 3367}
 
-# ── Custom CSS ─────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
   /* metric cards */
@@ -241,10 +203,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Load data (runs once, cached) ─────────────────────────────────────────────
 RESULTS, DATA_SOURCE, LOADED_MODELS = get_results()
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/shield.png", width=60)
     st.title("IDS · NSL-KDD")
@@ -262,7 +222,6 @@ with st.sidebar:
     selected_model = st.selectbox("", list(RESULTS.keys()), label_visibility="collapsed")
 
     st.divider()
-    # Data source badge
     if DATA_SOURCE == "live":
         st.success("🟢 Live model data")
     else:
@@ -271,16 +230,12 @@ with st.sidebar:
     st.caption("Dataset: NSL-KDD  ·  Train: 125,973  ·  Test: 22,544")
     st.caption("Classes: Normal · DoS · Probe · R2L · U2R")
 
-# ═══════════════════════════════════════════════════════════════
-# PAGE: OVERVIEW
-# ═══════════════════════════════════════════════════════════════
 if page == "📊 Overview":
     st.markdown("## 🛡️ Intrusion Detection System — Dashboard")
     st.markdown("**Dataset:** NSL-KDD &nbsp;|&nbsp; **Task:** 5-class multiclass classification &nbsp;|&nbsp; "
                 "**Focus:** Class imbalance robustness (R2L, U2R minority classes)")
     st.divider()
 
-    # ── Top KPI row ──
     r = RESULTS[selected_model]
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Model", selected_model.split(" ")[0])
@@ -290,7 +245,6 @@ if page == "📊 Overview":
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Macro F1 comparison bar ──
     col_a, col_b = st.columns([3, 2])
     with col_a:
         st.markdown("<div class='section-header'>Macro F1 — All Models</div>", unsafe_allow_html=True)
@@ -318,29 +272,25 @@ if page == "📊 Overview":
         st.markdown("<div class='section-header'>Key Insights</div>", unsafe_allow_html=True)
         st.markdown("""
         <div class='insight-box'>
-        📌 <b>Macro F1 is the primary metric.</b> Accuracy is misleading here — Normal + DoS dominate 
+         <b>Macro F1 is the primary metric.</b> Accuracy is misleading here — Normal + DoS dominate 
         test support (77%). A model predicting only Normal achieves ~43% accuracy but fails entirely on attacks.
         </div><br>
         <div class='warn-box'>
-        ⚠️ <b>R2L & U2R are structurally hard.</b> R2L shares flow-level features with Normal traffic.
+         <b>R2L & U2R are structurally hard.</b> R2L shares flow-level features with Normal traffic.
         U2R has only 44 training samples. Per-class recall for these classes is the real challenge.
         </div><br>
         <div class='insight-box'>
-        🔁 <b>Hierarchical model trade-off.</b> The 2-stage approach reveals compounding errors 
+         <b>Hierarchical model trade-off.</b> The 2-stage approach reveals compounding errors 
         across stages — a key finding that flat aggregate metrics would hide.
         </div>
         """, unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════════════════════════════
-# PAGE: MODEL COMPARISON
-# ═══════════════════════════════════════════════════════════════
 elif page == "🔍 Model Comparison":
     st.markdown("## Model Comparison")
     st.caption("Side-by-side per-class F1 and aggregate metrics across all trained models.")
     st.divider()
 
-    # ── Summary table ──
     st.markdown("<div class='section-header'>Aggregate Metrics</div>", unsafe_allow_html=True)
     summary = []
     for m, r in RESULTS.items():
@@ -360,9 +310,8 @@ elif page == "🔍 Model Comparison":
 
     st.divider()
 
-    # ── Grouped bar: per-class F1 across models ──
     st.markdown("<div class='section-header'>Per-Class F1 — All Models</div>", unsafe_allow_html=True)
-    model_colors = ["#4F8BF9", "#4CAF50", "#FF9800", "#F44336"]
+    model_colors = ["#4F8BF9", "#4CAF50", "#FF9800", "#F44336", "#9C27B0"]
     fig = go.Figure()
     for i, (m, r) in enumerate(RESULTS.items()):
         fig.add_trace(go.Bar(
@@ -384,7 +333,6 @@ elif page == "🔍 Model Comparison":
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── Radar chart ──
     st.markdown("<div class='section-header'>F1 Radar — Model Profiles</div>", unsafe_allow_html=True)
     categories = CLASSES + [CLASSES[0]]
     fig_radar = go.Figure()
@@ -409,9 +357,6 @@ elif page == "🔍 Model Comparison":
     st.plotly_chart(fig_radar, use_container_width=True)
 
 
-# ═══════════════════════════════════════════════════════════════
-# PAGE: PER-CLASS ANALYSIS
-# ═══════════════════════════════════════════════════════════════
 elif page == "📈 Per-Class Analysis":
     st.markdown(f"## Per-Class Analysis — {selected_model}")
     st.caption("Precision, Recall, and F1 broken down per attack class. "
@@ -463,7 +408,6 @@ elif page == "📈 Per-Class Analysis":
 
     st.divider()
 
-    # ── Precision-Recall trade-off scatter ──
     st.markdown("<div class='section-header'>Precision vs Recall Trade-off (bubble = support)</div>",
                 unsafe_allow_html=True)
     fig_pr = go.Figure()
@@ -493,9 +437,6 @@ elif page == "📈 Per-Class Analysis":
     st.plotly_chart(fig_pr, use_container_width=True)
 
 
-# ═══════════════════════════════════════════════════════════════
-# PAGE: CONFUSION MATRIX
-# ═══════════════════════════════════════════════════════════════
 elif page == "🧩 Confusion Matrix":
     st.markdown(f"## Confusion Matrix — {selected_model}")
     st.caption("Rows = True class, Columns = Predicted class. "
@@ -529,15 +470,12 @@ elif page == "🧩 Confusion Matrix":
         ax_col.plotly_chart(fig_cm, use_container_width=True)
 
     st.divider()
-    st.markdown("<div class='insight-box'>💡 <b>What to look for:</b> R2L rows — high off-diagonal "
+    st.markdown("<div class='insight-box'> <b>What to look for:</b> R2L rows — high off-diagonal "
                 "spill into Normal column reveals that R2L shares flow-level feature signatures with "
                 "benign traffic, making it structurally harder without payload/content features.</div>",
                 unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════════════════════════════
-# PAGE: CLASS IMBALANCE
-# ═══════════════════════════════════════════════════════════════
 elif page == "⚠️ Class Imbalance":
     st.markdown("## Class Imbalance Analysis")
     st.caption("Understanding the raw imbalance and the effect of SMOTENC oversampling on minority classes.")
@@ -617,9 +555,6 @@ elif page == "⚠️ Class Imbalance":
         st.dataframe(df_stats, hide_index=True, use_container_width=True)
 
 
-# ═══════════════════════════════════════════════════════════════
-# PAGE: LIVE INFERENCE
-# ═══════════════════════════════════════════════════════════════
 elif page == "🔮 Live Inference":
     st.markdown("## Live Inference")
     st.caption("Upload a preprocessed CSV (same feature schema as KDDTrain+) to run predictions.")
@@ -645,7 +580,6 @@ elif page == "🔮 Live Inference":
             if st.button("🚀 Run Inference", type="primary"):
                 model = LOADED_MODELS.get(infer_model)
                 if model is not None:
-                    # Load scaler if available
                     scaler_path = MODEL_DIR / "scaler.pkl"
                     le_path     = MODEL_DIR / "label_encoder.pkl"
                     X = df_infer.values
@@ -654,13 +588,11 @@ elif page == "🔮 Live Inference":
                             scaler = pickle.load(f)
                         X = scaler.transform(X)
 
-                    # Handle hierarchical dict vs flat model
                     if isinstance(model, dict) and "stage1_model" in model:
                         preds, _ = _hierarchical_predict(model, X)
                     else:
                         preds = model.predict(X)
 
-                    # Decode labels: if LabelEncoder saved, use it; else map int→CLASSES
                     if le_path.exists():
                         with open(le_path, "rb") as f:
                             le = pickle.load(f)
@@ -694,7 +626,6 @@ elif page == "🔮 Live Inference":
                         file_name="predictions.csv", mime="text/csv",
                     )
                 else:
-                    # Demo mode — model pkl not loaded
                     st.warning(f"`{MODEL_FILES[infer_model]}` not found in `models/`. Running demo.")
                     np.random.seed(42)
                     demo_preds = np.random.choice(
@@ -712,48 +643,6 @@ elif page == "🔮 Live Inference":
         else:
             st.info("⬆️ Upload a CSV to begin. Expected columns match NSL-KDD 41-feature schema.")
 
-#     with col_info:
-#         st.markdown("<div class='section-header'>How to wire real models</div>",
-#                     unsafe_allow_html=True)
-#         st.code("""
-# # ── Add this block to the END of your notebook ──
-# import pickle, numpy as np
-# from pathlib import Path
-
-# Path('models').mkdir(exist_ok=True)
-# Path('results').mkdir(exist_ok=True)
-
-# # 1. Save flat models
-# pickle.dump(rf,  open('models/random_forest.pkl', 'wb'))
-# pickle.dump(xgb, open('models/xgboost.pkl', 'wb'))
-# pickle.dump(svm, open('models/svm_(rbf).pkl', 'wb'))
-
-# # 2. Save hierarchical model as a dict (two-stage, not a single object)
-# hier_dict = {
-#     "stage1_model": stage1_model,
-#     "stage2_model": stage2_model,
-#     "normal_idx":   normal_idx,
-#     "attack_classes": attack_classes,
-#     "new_to_orig":  new_to_orig,
-#     "n_classes":    len(class_names),
-# }
-# pickle.dump(hier_dict, open('models/hierarchical.pkl', 'wb'))
-
-# # 3. Save preprocessing artifacts
-# pickle.dump(scaler, open('models/scaler.pkl', 'wb'))
-# pickle.dump(le,     open('models/label_encoder.pkl', 'wb'))
-
-# # 4. Save test split — dashboard uses these to compute all metrics live
-# np.save('results/X_test.npy', X_test_s)   # scaled test features
-# np.save('results/y_test.npy', y_test_enc) # encoded integer labels
-
-# # Done — restart the dashboard and the sidebar goes green 🟢
-#         """, language="python")
-#         st.markdown("<div class='insight-box'>📁 Place saved <code>.pkl</code> files in the "
-#                     "<code>models/</code> folder next to <code>app.py</code>. The dashboard will "
-#                     "auto-detect and use them.</div>", unsafe_allow_html=True)
-
-# ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
 st.caption("NSL-KDD Multiclass IDS · Built with Streamlit & Plotly · "
            "Dataset: Tavallaee et al., 2009")
